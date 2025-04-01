@@ -1,332 +1,167 @@
 #include <windows.h>
 #include <wincrypt.h>
 #include <stdio.h>
-#include <string>
 
 #pragma comment(lib, "crypt32.lib")
+#pragma comment(lib, "wintrust.lib")
 
-// Structure definitions for Signer API
 typedef struct _SIGNER_FILE_INFO {
-    DWORD       cbSize;
-    LPCWSTR     pwszFileName;
-    HANDLE      hFile;
+    DWORD cbSize;
+    LPCWSTR pwszFileName;
+    HANDLE hFile;
 } SIGNER_FILE_INFO, * PSIGNER_FILE_INFO;
 
-typedef struct _SIGNER_BLOB_INFO {
-    DWORD       cbSize;
-    GUID* pGuidSubject;
-    DWORD       cbBlob;
-    BYTE* pbBlob;
-    LPCWSTR     pwszDisplayName;
-} SIGNER_BLOB_INFO, * PSIGNER_BLOB_INFO;
-
-typedef enum _SIGNER_SUBJECT_CHOICE {
-    SIGNER_SUBJECT_FILE = 1,
-    SIGNER_SUBJECT_BLOB
-} SIGNER_SUBJECT_CHOICE, * PSIGNER_SUBJECT_CHOICE;
-
 typedef struct _SIGNER_SUBJECT_INFO {
-    DWORD                   cbSize;
-    DWORD* pdwIndex;
-    SIGNER_SUBJECT_CHOICE   dwSubjectChoice;
+    DWORD cbSize;
+    DWORD dwSubjectChoice;
     union {
-        PSIGNER_FILE_INFO   pSignerFileInfo;
-        PSIGNER_BLOB_INFO   pSignerBlobInfo;
+        PSIGNER_FILE_INFO pSignerFileInfo;
     };
 } SIGNER_SUBJECT_INFO, * PSIGNER_SUBJECT_INFO;
 
-typedef enum _SIGNER_CERT_POLICY {
-    SIGNER_CERT_POLICY_CHAIN = 1,
-    SIGNER_CERT_POLICY_CHAIN_NO_ROOT,
-    SIGNER_CERT_POLICY_STORE
-} SIGNER_CERT_POLICY, * PSIGNER_CERT_POLICY;
-
 typedef struct _SIGNER_CERT_STORE_INFO {
-    DWORD                   cbSize;
-    PCCERT_CONTEXT          pSigningCert;
-    DWORD                   dwCertPolicy;
-    HCERTSTORE              hCertStore;
+    DWORD cbSize;
+    PCCERT_CONTEXT pSigningCert;
+    DWORD dwCertPolicy;
+    HCERTSTORE hCertStore;
 } SIGNER_CERT_STORE_INFO, * PSIGNER_CERT_STORE_INFO;
 
-typedef struct _SIGNER_SPC_CHAIN_INFO {
-    DWORD                   cbSize;
-    LPCWSTR                 pwszSpcFile;
-    DWORD                   dwCertPolicy;
-    HCERTSTORE              hCertStore;
-} SIGNER_SPC_CHAIN_INFO, * PSIGNER_SPC_CHAIN_INFO;
-
-typedef enum _SIGNER_CERT_CHOICE {
-    SIGNER_CERT_STORE = 1,
-    SIGNER_CERT_SPC,
-    SIGNER_CERT_CUSTOM
-} SIGNER_CERT_CHOICE, * PSIGNER_CERT_CHOICE;
-
 typedef struct _SIGNER_CERT {
-    DWORD                   cbSize;
-    SIGNER_CERT_CHOICE      dwCertChoice;
+    DWORD cbSize;
+    DWORD dwCertChoice;
     union {
-        PSIGNER_CERT_STORE_INFO     pCertStoreInfo;
-        PSIGNER_SPC_CHAIN_INFO      pSpcChainInfo;
-        void* pCustomCertInfo;
+        PSIGNER_CERT_STORE_INFO pCertStoreInfo;
     };
-    HWND                    hwnd;
+    HWND hwnd;
 } SIGNER_CERT, * PSIGNER_CERT;
 
-typedef struct _SIGNER_ATTR_AUTHCODE {
-    DWORD                   cbSize;
-    BOOL                    fCommercial;
-    BOOL                    fIndividual;
-    LPCWSTR                 pwszName;
-    LPCWSTR                 pwszInfo;
-} SIGNER_ATTR_AUTHCODE, * PSIGNER_ATTR_AUTHCODE;
-
-typedef enum _SIGNER_SIGNATURE_ATTRIBUTE_CHOICE {
-    SIGNER_NO_ATTR = 0,
-    SIGNER_AUTHCODE_ATTR
-} SIGNER_SIGNATURE_ATTRIBUTE_CHOICE, * PSIGNER_SIGNATURE_ATTRIBUTE_CHOICE;
-
 typedef struct _SIGNER_SIGNATURE_INFO {
-    DWORD                               cbSize;
-    ALG_ID                              algidHash;
-    DWORD                               dwAttrChoice;
-    union {
-        PSIGNER_ATTR_AUTHCODE           pAttrAuthcode;
-    };
-    PCRYPT_ATTRIBUTES                   psAuthenticated;
-    PCRYPT_ATTRIBUTES                   psUnauthenticated;
+    DWORD cbSize;
+    ALG_ID algidHash;
+    DWORD dwAttrChoice;
+    void* pAttrAuthcode;
+    PCRYPT_ATTRIBUTES psAuthenticated;
+    PCRYPT_ATTRIBUTES psUnauthenticated;
 } SIGNER_SIGNATURE_INFO, * PSIGNER_SIGNATURE_INFO;
 
-typedef struct _SIGNER_CONTEXT_INFO {
-    DWORD       cbSize;
-    DWORD       cbBlob;
-    BYTE* pbBlob;
-    void* pSignerContextInfo;
-} SIGNER_CONTEXT_INFO, * PSIGNER_CONTEXT_INFO;
+#define SIGNER_SUBJECT_FILE 1
+#define SIGNER_CERT_STORE 2
+#define SIGNER_CERT_POLICY_CHAIN 0x80000000
+#define SIGNER_NO_ATTR 0
 
-typedef struct _SIGNER_CONTEXT {
-    DWORD       cbSize;
-    DWORD       cbBlob;
-    BYTE* pbBlob;
-} SIGNER_CONTEXT, * PSIGNER_CONTEXT;
-
-// Function to load a certificate from a PFX file
-PCCERT_CONTEXT LoadCertificateFromFile(const std::wstring& certFilePath, const std::wstring& password, HCERTSTORE* phStore) {
-    // Open the certificate file
-    HANDLE hFile = CreateFileW(
-        certFilePath.c_str(),
-        GENERIC_READ,
-        FILE_SHARE_READ,
-        NULL,
-        OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL,
-        NULL);
-
-    if (hFile == INVALID_HANDLE_VALUE) {
-        printf("Failed to open certificate file. Error: 0x%08x\n", GetLastError());
-        return NULL;
-    }
-
-    // Get file size
-    DWORD fileSize = GetFileSize(hFile, NULL);
-    if (fileSize == INVALID_FILE_SIZE) {
-        printf("Failed to get certificate file size. Error: 0x%08x\n", GetLastError());
-        CloseHandle(hFile);
-        return NULL;
-    }
-
-    // Allocate memory for certificate data
-    BYTE* certData = new BYTE[fileSize];
-    DWORD bytesRead = 0;
-
-    // Read certificate file
-    if (!ReadFile(hFile, certData, fileSize, &bytesRead, NULL) || bytesRead != fileSize) {
-        printf("Failed to read certificate file. Error: 0x%08x\n", GetLastError());
-        CloseHandle(hFile);
-        delete[] certData;
-        return NULL;
-    }
-
-    CloseHandle(hFile);
-
-    // Create a memory store to hold the certificate
-    *phStore = CertOpenStore(
-        CERT_STORE_PROV_MEMORY,
-        X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
-        0,
-        CERT_STORE_CREATE_NEW_FLAG,
-        NULL);
-
-    if (!*phStore) {
-        printf("Failed to create certificate store. Error: 0x%08x\n", GetLastError());
-        delete[] certData;
-        return NULL;
-    }
-
-    // Import the PFX data
-    CRYPT_DATA_BLOB pfxBlob;
-    pfxBlob.cbData = fileSize;
-    pfxBlob.pbData = certData;
-
-    // Get the PFX import flags
-    DWORD dwFlags = CRYPT_USER_KEYSET;
-
-    // Import the PFX file into the store
-    if (!PFXImportCertStore(
-        &pfxBlob,
-        password.empty() ? NULL : password.c_str(),
-        dwFlags)) {
-        printf("Failed to import PFX. Error: 0x%08x\n", GetLastError());
-        CertCloseStore(*phStore, 0);
-        delete[] certData;
-        return NULL;
-    }
-
-    // Get the certificate context (first certificate with private key)
-    PCCERT_CONTEXT pCertContext = NULL;
-    pCertContext = CertFindCertificateInStore(
-        *phStore,
-        X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
-        CERT_FIND_HAS_PRIVATE_KEY,
-        CERT_FIND_ANY,
-        NULL,
-        NULL);
-
-    delete[] certData;
-
-    if (!pCertContext) {
-        printf("No certificate with private key found. Error: 0x%08x\n", GetLastError());
-        CertCloseStore(*phStore, 0);
-        return NULL;
-    }
-
-    return pCertContext;
+// Display detailed Windows error messages
+void DisplayError(const char* context) {
+    DWORD error = GetLastError();
+    char buffer[256];
+    FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        NULL, error, 0, buffer, sizeof(buffer), NULL);
+    printf("%s failed with error %d: %s\n", context, error, buffer);
 }
 
-bool SignFile(const std::wstring& filePath, const std::wstring& certFilePath, const std::wstring& password) {
-    HCERTSTORE hStore = NULL;
-    PCCERT_CONTEXT pCertContext = NULL;
-    bool result = false;
-    DWORD dwIndex = 0;  // Required for SIGNER_SUBJECT_INFO
-
-    // Load certificate from file
-    pCertContext = LoadCertificateFromFile(certFilePath, password, &hStore);
-    if (!pCertContext) {
-        return false;
+// Read certificate from a PFX file
+BOOL ReadCertificateFromFile(const wchar_t* pfxFilePath, const wchar_t* password, HCERTSTORE* hCertStore, PCCERT_CONTEXT* pCertContext) {
+    HANDLE hFile = CreateFileW(pfxFilePath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        DisplayError("Opening PFX file");
+        return FALSE;
     }
 
-    // Initialize signing parameters
-    SIGNER_FILE_INFO fileInfo = { 0 };
-    fileInfo.cbSize = sizeof(SIGNER_FILE_INFO);
-    fileInfo.pwszFileName = filePath.c_str();
-    fileInfo.hFile = NULL;
-
-    SIGNER_SUBJECT_INFO subjectInfo = { 0 };
-    subjectInfo.cbSize = sizeof(SIGNER_SUBJECT_INFO);
-    subjectInfo.dwSubjectChoice = SIGNER_SUBJECT_FILE;
-    subjectInfo.pSignerFileInfo = &fileInfo;
-    subjectInfo.pdwIndex = &dwIndex;
-
-    // Certificate store info
-    SIGNER_CERT_STORE_INFO certStoreInfo = { 0 };
-    certStoreInfo.cbSize = sizeof(SIGNER_CERT_STORE_INFO);
-    certStoreInfo.dwCertPolicy = SIGNER_CERT_POLICY_CHAIN;
-    certStoreInfo.hCertStore = hStore;
-    certStoreInfo.pSigningCert = pCertContext;
-
-    // Certificate info
-    SIGNER_CERT certInfo = { 0 };
-    certInfo.cbSize = sizeof(SIGNER_CERT);
-    certInfo.dwCertChoice = SIGNER_CERT_STORE;
-    certInfo.pCertStoreInfo = &certStoreInfo;
-    certInfo.hwnd = NULL;
-
-    // Signature info
-    SIGNER_SIGNATURE_INFO signatureInfo = { 0 };
-    signatureInfo.cbSize = sizeof(SIGNER_SIGNATURE_INFO);
-    signatureInfo.algidHash = CALG_SHA_256;
-    signatureInfo.dwAttrChoice = SIGNER_NO_ATTR;
-    signatureInfo.pAttrAuthcode = NULL;
-    signatureInfo.psAuthenticated = NULL;
-    signatureInfo.psUnauthenticated = NULL;
-
-    SIGNER_CONTEXT_INFO contextInfo = { 0 };
-    contextInfo.cbSize = sizeof(SIGNER_CONTEXT_INFO);
-    contextInfo.pSignerContextInfo = NULL;
-    SIGNER_CONTEXT* pSignerContext = NULL;
-
-    // Load SignerSign function dynamically from MSSign32.dll
-    HMODULE hMSSign32 = LoadLibrary(L"MSSign32.dll");
-    if (!hMSSign32) {
-        printf("Failed to load MSSign32.dll. Error: 0x%08x\n", GetLastError());
-        CertFreeCertificateContext(pCertContext);
-        CertCloseStore(hStore, 0);
-        return false;
+    DWORD fileSize = GetFileSize(hFile, NULL);
+    if (fileSize == INVALID_FILE_SIZE) {
+        DisplayError("Getting PFX file size");
+        CloseHandle(hFile);
+        return FALSE;
     }
 
-    typedef HRESULT(WINAPI* PFSignerSign)(
-        SIGNER_SUBJECT_INFO* pSubjectInfo,
-        SIGNER_CERT* pSignerCert,
-        SIGNER_SIGNATURE_INFO* pSignatureInfo,
-        void* pTimestampSettings,  // Set to NULL to ignore timestamping
-        SIGNER_CONTEXT_INFO* pSignerContextInfo,
-        SIGNER_CONTEXT** ppSignerContext);
-
-    PFSignerSign pfSignerSign = (PFSignerSign)GetProcAddress(hMSSign32, "SignerSign");
-    if (!pfSignerSign) {
-        printf("Failed to get SignerSign function. Error: 0x%08x\n", GetLastError());
-        FreeLibrary(hMSSign32);
-        CertFreeCertificateContext(pCertContext);
-        CertCloseStore(hStore, 0);
-        return false;
+    BYTE* pfxData = (BYTE*)HeapAlloc(GetProcessHeap(), 0, fileSize);
+    if (!pfxData) {
+        printf("Memory allocation failed\n");
+        CloseHandle(hFile);
+        return FALSE;
     }
 
-    // Sign the file (no timestamping)
-    HRESULT hr = pfSignerSign(
-        &subjectInfo,
-        &certInfo,
-        &signatureInfo,
-        NULL,  // No timestamp settings
-        &contextInfo,
-        &pSignerContext);
-
-    if (SUCCEEDED(hr)) {
-        printf("File signed successfully!\n");
-        result = true;
+    DWORD bytesRead;
+    if (!ReadFile(hFile, pfxData, fileSize, &bytesRead, NULL) || bytesRead != fileSize) {
+        DisplayError("Reading PFX file");
+        HeapFree(GetProcessHeap(), 0, pfxData);
+        CloseHandle(hFile);
+        return FALSE;
     }
-    else {
-        printf("Signing failed. HRESULT: 0x%08x\n", hr);
-    }
+    CloseHandle(hFile);
 
-    // Cleanup
-    if (pSignerContext) {
-        typedef HRESULT(WINAPI* PFSignerFreeSignerContext)(SIGNER_CONTEXT* pSignerContext);
-        PFSignerFreeSignerContext pfSignerFreeSignerContext =
-            (PFSignerFreeSignerContext)GetProcAddress(hMSSign32, "SignerFreeSignerContext");
+    CRYPT_DATA_BLOB pfxBlob;
+    pfxBlob.cbData = fileSize;
+    pfxBlob.pbData = pfxData;
 
-        if (pfSignerFreeSignerContext) {
-            pfSignerFreeSignerContext(pSignerContext);
-        }
+    *hCertStore = PFXImportCertStore(&pfxBlob, password, CRYPT_USER_KEYSET);
+    HeapFree(GetProcessHeap(), 0, pfxData);
+
+    if (!*hCertStore) {
+        DisplayError("Importing PFX");
+        return FALSE;
     }
 
-    FreeLibrary(hMSSign32);
-    CertFreeCertificateContext(pCertContext);
-    CertCloseStore(hStore, 0);
+    *pCertContext = CertFindCertificateInStore(*hCertStore, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, 0, CERT_FIND_ANY, NULL, NULL);
+    if (!*pCertContext) {
+        DisplayError("Finding certificate");
+        CertCloseStore(*hCertStore, 0);
+        return FALSE;
+    }
 
-    return result;
+    return TRUE;
+}
+
+// Sign PE file
+BOOL SignPEFile(const wchar_t* filePath, HCERTSTORE hCertStore, PCCERT_CONTEXT pCertContext) {
+    SIGNER_FILE_INFO fileInfo = { sizeof(SIGNER_FILE_INFO), filePath, NULL };
+    SIGNER_SUBJECT_INFO subjectInfo = { sizeof(SIGNER_SUBJECT_INFO), SIGNER_SUBJECT_FILE, &fileInfo };
+    SIGNER_CERT_STORE_INFO certStoreInfo = { sizeof(SIGNER_CERT_STORE_INFO), pCertContext, SIGNER_CERT_POLICY_CHAIN, hCertStore };
+    SIGNER_CERT certInfo = { sizeof(SIGNER_CERT), SIGNER_CERT_STORE, &certStoreInfo, NULL };
+    SIGNER_SIGNATURE_INFO signatureInfo = { sizeof(SIGNER_SIGNATURE_INFO), CALG_SHA_256, SIGNER_NO_ATTR, NULL, NULL, NULL };
+
+    HMODULE hMsSign32 = LoadLibraryA("mssign32.dll");
+    if (!hMsSign32) {
+        DisplayError("Loading mssign32.dll");
+        return FALSE;
+    }
+
+    typedef HRESULT(WINAPI* SIGNERSIGN)(PSIGNER_SUBJECT_INFO, PSIGNER_CERT, PSIGNER_SIGNATURE_INFO, void*);
+    SIGNERSIGN pfnSignerSign = (SIGNERSIGN)GetProcAddress(hMsSign32, "SignerSign");
+    if (!pfnSignerSign) {
+        DisplayError("Getting SignerSign function");
+        FreeLibrary(hMsSign32);
+        return FALSE;
+    }
+
+    HRESULT hr = pfnSignerSign(&subjectInfo, &certInfo, &signatureInfo, NULL);
+    FreeLibrary(hMsSign32);
+
+    if (FAILED(hr)) {
+        printf("Signing failed with HRESULT 0x%08x\n", hr);
+        return FALSE;
+    }
+
+    printf("File signed successfully!\n");
+    return TRUE;
 }
 
 int wmain(int argc, wchar_t* argv[]) {
     if (argc < 3) {
-        printf("Usage: PESigner.exe <file_path> <certificate_file_path> [certificate_password]\n");
-        printf("Example: PESigner.exe \"C:\\path\\to\\file.exe\" \"C:\\path\\to\\cert.pfx\" \"password\"\n");
+        printf("Usage: PEFileSigner.exe <PE_file_path> <certificate_path> [certificate_password]\n");
         return 1;
     }
 
-    std::wstring filePath = argv[1];
-    std::wstring certFilePath = argv[2];
-    std::wstring certPassword = (argc > 3) ? argv[3] : L"";
+    HCERTSTORE hCertStore = NULL;
+    PCCERT_CONTEXT pCertContext = NULL;
 
-    bool success = SignFile(filePath, certFilePath, certPassword);
+    if (!ReadCertificateFromFile(argv[2], argc > 3 ? argv[3] : L"", &hCertStore, &pCertContext)) {
+        return 1;
+    }
+
+    BOOL success = SignPEFile(argv[1], hCertStore, pCertContext);
+
+    if (pCertContext) CertFreeCertificateContext(pCertContext);
+    if (hCertStore) CertCloseStore(hCertStore, 0);
 
     return success ? 0 : 1;
 }
